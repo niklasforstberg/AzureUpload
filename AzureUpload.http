@@ -1,0 +1,6 @@
+@AzureUpload_HostAddress = http://localhost:5186
+
+GET {{AzureUpload_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
