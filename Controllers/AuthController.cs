@@ -72,7 +72,9 @@ public class AuthController : ControllerBase
             {
                 return BadRequest("Username already exists");
             }
-            var normalizedRole = request.Role?.ToUpper();
+
+            var normalizedRole = request.Role?.Trim().ToUpper();
+            
             if (normalizedRole != "ADMIN" && normalizedRole != "USER") 
             {
                 return BadRequest("Invalid role specified");
@@ -84,7 +86,7 @@ public class AuthController : ControllerBase
             {
                 Username = request.Username,
                 PasswordHash = hashedPassword,
-                Role = request.Role
+                Role = normalizedRole
             };
 
             await _context.Users.AddAsync(user);
@@ -126,7 +128,7 @@ public class AuthController : ControllerBase
             {
                 Username = request.Username,
                 PasswordHash = hashedPassword,
-                Role = "Admin" // Force admin role
+                Role = "ADMIN"
             };
 
             await _context.Users.AddAsync(admin);

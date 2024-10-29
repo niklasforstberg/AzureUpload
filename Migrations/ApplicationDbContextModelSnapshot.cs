@@ -48,7 +48,7 @@ namespace AzureUpload.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Files");
+                    b.ToTable("Files", (string)null);
                 });
 
             modelBuilder.Entity("AzureUpload.Models.User", b =>
@@ -71,7 +71,7 @@ namespace AzureUpload.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("AzureUpload.Models.StoredFile", b =>

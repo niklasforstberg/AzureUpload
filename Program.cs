@@ -8,6 +8,7 @@ using System.Text;
 using AzureUpload.Data;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using AzureUpload.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -54,6 +55,9 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
+// Add health checks for Azure Storage
+builder.Services.AddHealthChecks()
+    .AddCheck<AzureBlobStorageHealthCheck>("Azure Blob Storage");
 
 // Add SQLite
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -61,7 +65,14 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 
 // Add Azure Blob Storage
 builder.Services.AddSingleton(x => 
-    new BlobServiceClient(builder.Configuration["AzureStorage:ConnectionString"]));
+{
+
+    var connectionString = builder.Configuration["AzureStorage:ConnectionString"] 
+        ?? throw new ArgumentNullException("AzureStorage:ConnectionString configuration is required");
+    
+
+    return new BlobServiceClient(connectionString);
+});
 
 // Add JWT Authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -83,9 +94,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // Add Authorization
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"));
+    options.AddPolicy("AdminOnly", policy => 
+        policy.RequireRole("ADMIN"));
+        
     options.AddPolicy("UserAccess", policy => 
-        policy.RequireRole("Admin", "User"));
+        policy.RequireRole("ADMIN", "USER"));
 });
 
 // Add OpenTelemetry
@@ -102,7 +115,7 @@ builder.Services.AddOpenTelemetry()
     });
 
 // Simplified Health Checks
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks(); 
 
 var app = builder.Build();
 
@@ -123,3 +136,4 @@ app.MapHealthChecks("/health");
 app.MapControllers();
 
 app.Run();
+
