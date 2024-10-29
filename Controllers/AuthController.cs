@@ -72,8 +72,8 @@ public class AuthController : ControllerBase
             {
                 return BadRequest("Username already exists");
             }
-
-            if (request.Role != "Admin" && request.Role != "User")
+            var normalizedRole = request.Role?.ToUpper();
+            if (normalizedRole != "ADMIN" && normalizedRole != "USER") 
             {
                 return BadRequest("Invalid role specified");
             }
@@ -140,6 +140,62 @@ public class AuthController : ControllerBase
         {
             _logger.LogError(ex, "Error creating initial admin user {Username}", request.Username);
             return StatusCode(500, "An error occurred while creating the initial admin user");
+        }
+    }
+
+    [HttpGet("users")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<ActionResult<IEnumerable<UserResponse>>> GetUsers()
+    {
+        try
+        {
+            var users = await _context.Users
+                .Select(u => new UserResponse(
+                    u.Id,
+                    u.Username,
+                    u.Role))
+                .ToListAsync();
+
+            return Ok(users);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving users list");
+            return StatusCode(500, "An error occurred while retrieving users");
+        }
+    }
+
+    [HttpGet("me")]
+    [Authorize(Policy = "UserAccess")]
+    public async Task<ActionResult<UserResponse>> GetCurrentUser()
+    {
+        try
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (userId == null)
+            {
+                return BadRequest("User ID claim not found");
+            }
+
+            var user = await _context.Users
+                .Where(u => u.Id == Guid.Parse(userId))
+                .Select(u => new UserResponse(
+                    u.Id,
+                    u.Username,
+                    u.Role))
+                .FirstOrDefaultAsync();
+
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            return Ok(user);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving current user information");
+            return StatusCode(500, "An error occurred while retrieving user information");
         }
     }
 
