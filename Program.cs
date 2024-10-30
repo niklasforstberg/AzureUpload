@@ -9,6 +9,8 @@ using AzureUpload.Data;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using AzureUpload.HealthChecks;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using System.Collections.Generic;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,6 +42,7 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "Bearer"
     });
 
+    // Add global authorization requirement
     options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
         {
@@ -49,11 +52,15 @@ builder.Services.AddSwaggerGen(options =>
                 {
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
                     Id = "Bearer"
-                }
+                },
+                Scheme = "oauth2",
+                Name = "Bearer",
+                In = Microsoft.OpenApi.Models.ParameterLocation.Header
             },
-            Array.Empty<string>()
+            new List<string>()
         }
     });
+
 });
 // Add health checks for Azure Storage
 builder.Services.AddHealthChecks()
@@ -131,7 +138,29 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 // Health Check endpoint
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        
+        var response = new
+        {
+            Status = report.Status.ToString(),
+            Duration = report.TotalDuration,
+            Info = report.Entries.Select(e => new
+            {
+                Key = e.Key,
+                Status = e.Value.Status.ToString(),
+                Description = e.Value.Description,
+                Duration = e.Value.Duration,
+                Data = e.Value.Data
+            })
+        };
+
+        await context.Response.WriteAsJsonAsync(response);
+    }
+});
 
 app.MapControllers();
 

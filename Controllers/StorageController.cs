@@ -63,4 +63,58 @@ public class StorageController : ControllerBase
             return StatusCode(500, "An error occurred while retrieving the file list");
         }
     }
+
+    [HttpPost("upload")]
+    public async Task<ActionResult<BlobItemResponse>> UploadFile(IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest("No file was provided");
+        }
+
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var blobClient = containerClient.GetBlobClient(file.FileName);
+
+            // Check if blob already exists
+            if (await blobClient.ExistsAsync())
+            {
+                return Conflict($"A file with name '{file.FileName}' already exists");
+            }
+
+            // Upload the file with public access
+            var blobHttpHeaders = new BlobHttpHeaders
+            {
+                ContentType = file.ContentType
+            };
+
+            await using var stream = file.OpenReadStream();
+            await blobClient.UploadAsync(stream, new BlobUploadOptions
+            {
+                HttpHeaders = blobHttpHeaders
+            });
+
+            // Return the blob information
+            var properties = await blobClient.GetPropertiesAsync();
+            
+            return Ok(new BlobItemResponse(
+                Name: file.FileName,
+                ContentType: properties.Value.ContentType,
+                Size: properties.Value.ContentLength,
+                LastModified: properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                Uri: blobClient.Uri.ToString()
+            ));
+        }
+        catch (Azure.RequestFailedException ex)
+        {
+            _logger.LogError(ex, "Azure Storage error while uploading file {FileName}", file.FileName);
+            return StatusCode(500, $"Azure Storage error: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading file {FileName}", file.FileName);
+            return StatusCode(500, "An unexpected error occurred while uploading the file");
+        }
+    }
 }
