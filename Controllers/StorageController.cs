@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AzureUpload.Data;
 using AzureUpload.Models.DTOs;
+using AzureUpload.Models;
+using System.Security.Claims;
+using Microsoft.EntityFrameworkCore;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -90,7 +93,14 @@ public class StorageController : ControllerBase
 
         try
         {
-            // Sanitize filename
+            // Get current user ID from claims
+            var userIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userIdString) || !Guid.TryParse(userIdString, out Guid userId))
+            {
+                return BadRequest("Invalid user ID");
+            }
+
+            // Sanitize filename and upload to blob storage
             var sanitizedFileName = SanitizeFileName(file.FileName);
             if (string.IsNullOrWhiteSpace(sanitizedFileName))
             {
@@ -106,7 +116,7 @@ public class StorageController : ControllerBase
                 return Conflict($"A file with name '{file.FileName}' already exists");
             }
 
-            // Upload the file with public access
+            // Upload the file
             var blobHttpHeaders = new BlobHttpHeaders
             {
                 ContentType = file.ContentType
@@ -118,8 +128,22 @@ public class StorageController : ControllerBase
                 HttpHeaders = blobHttpHeaders
             });
 
-            // Return the blob information
+            // Get blob properties
             var properties = await blobClient.GetPropertiesAsync();
+
+            // Create database record
+            var storedFile = new StoredFile
+            {
+                FileName = file.FileName,
+                BlobName = sanitizedFileName,
+                ContentType = file.ContentType,
+                Size = file.Length,
+                UploadDate = DateTime.UtcNow,
+                UserId = userId
+            };
+
+            await _context.Files.AddAsync(storedFile);
+            await _context.SaveChangesAsync();
             
             return Ok(new BlobItemResponse(
                 Name: sanitizedFileName,
@@ -129,15 +153,179 @@ public class StorageController : ControllerBase
                 Uri: blobClient.Uri.ToString()
             ));
         }
-        catch (Azure.RequestFailedException ex)
-        {
-            _logger.LogError(ex, "Azure Storage error while uploading file {FileName}", file.FileName);
-            return StatusCode(500, $"Azure Storage error: {ex.Message}");
-        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error uploading file {FileName}", file.FileName);
             return StatusCode(500, "An unexpected error occurred while uploading the file");
+        }
+    }
+
+    [HttpGet("my-files")]
+    public async Task<ActionResult<IEnumerable<StoredFile>>> GetMyFiles()
+    {
+        try
+        {
+            var userIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userIdString) || !Guid.TryParse(userIdString, out Guid userId))
+            {
+                return BadRequest("Invalid user ID");
+            }
+
+            var files = await _context.Files
+                .Where(f => f.UserId == userId && !f.IsDeleted)
+                .OrderByDescending(f => f.UploadDate)
+                .ToListAsync();
+
+            return Ok(files);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving user files");
+            return StatusCode(500, "An error occurred while retrieving files");
+        }
+    }
+
+    [HttpGet("audit-files")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<ActionResult<FileAuditResponse>> AuditFiles([FromQuery] bool cleanup = false)
+    {
+        try
+        {
+            var orphanedFiles = new List<OrphanedFileInfo>();
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            
+            // Get all files from database
+            var dbFiles = await _context.Files
+                .Select(f => new { f.Id, f.BlobName })
+                .ToDictionaryAsync(f => f.BlobName, f => f.Id);
+
+            // Get all blobs from Azure
+            var azureFiles = new HashSet<string>();
+            await foreach (var blob in containerClient.GetBlobsAsync())
+            {
+                azureFiles.Add(blob.Name);
+                
+                // Check if blob exists in DB
+                if (!dbFiles.ContainsKey(blob.Name))
+                {
+                    orphanedFiles.Add(new OrphanedFileInfo(
+                        FileName: blob.Name,
+                        Location: "Azure",
+                        Size: blob.Properties.ContentLength ?? 0,
+                        LastModified: blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow
+                    ));
+                }
+            }
+
+            // Check for files in DB that don't exist in Azure
+            foreach (var dbFile in dbFiles)
+            {
+                if (!azureFiles.Contains(dbFile.Key))
+                {
+                    orphanedFiles.Add(new OrphanedFileInfo(
+                        FileName: dbFile.Key,
+                        Location: "Database",
+                        Size: 0, // Size unknown for DB-only files
+                        LastModified: DateTime.UtcNow // We don't have this info readily available
+                    ));
+                }
+            }
+
+            // Cleanup if requested
+            if (cleanup && orphanedFiles.Any())
+            {
+                foreach (var orphanedFile in orphanedFiles)
+                {
+                    if (orphanedFile.Location == "Azure")
+                    {
+                        // Delete from Azure
+                        var blobClient = containerClient.GetBlobClient(orphanedFile.FileName);
+                        await blobClient.DeleteIfExistsAsync();
+                    }
+                    else
+                    {
+                        // Delete from Database
+                        var fileToDelete = await _context.Files
+                            .FirstOrDefaultAsync(f => f.BlobName == orphanedFile.FileName);
+                        if (fileToDelete != null)
+                        {
+                            _context.Files.Remove(fileToDelete);
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+            }
+
+            return Ok(new FileAuditResponse(
+                OrphanedFiles: orphanedFiles,
+                TotalOrphaned: orphanedFiles.Count,
+                CleanupPerformed: cleanup,
+                AuditTime: DateTime.UtcNow
+            ));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during file audit");
+            return StatusCode(500, "An error occurred while auditing files");
+        }
+    }
+
+    [HttpDelete("files/{fileName}")]
+    public async Task<IActionResult> DeleteFile(string fileName)
+    {
+        try
+        {
+            // Get current user ID from claims
+            var userIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userIdString) || !Guid.TryParse(userIdString, out Guid userId))
+            {
+                return BadRequest("Invalid user ID");
+            }
+
+            // Find the file in database
+            var storedFile = await _context.Files
+                .FirstOrDefaultAsync(f => f.BlobName == fileName && f.UserId == userId);
+
+            if (storedFile == null)
+            {
+                return NotFound("File not found");
+            }
+
+            if (storedFile.IsDeleted)
+            {
+                return BadRequest("File is already marked as deleted");
+            }
+
+            // Delete from Azure
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var blobClient = containerClient.GetBlobClient(fileName);
+
+            if (await blobClient.ExistsAsync())
+            {
+                await blobClient.DeleteAsync();
+            }
+
+            // Mark as deleted in database
+            storedFile.IsDeleted = true;
+            storedFile.DeletedDate = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "File {FileName} deleted by user {UserId} at {DeletedDate}", 
+                fileName, userId, storedFile.DeletedDate);
+
+            return Ok(new
+            {
+                Message = "File deleted successfully",
+                FileName = storedFile.FileName,
+                DeletedDate = storedFile.DeletedDate
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting file {FileName}", fileName);
+            return StatusCode(500, "An error occurred while deleting the file");
         }
     }
 

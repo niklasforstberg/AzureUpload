@@ -8,6 +8,8 @@ public class StoredFile
     public string ContentType { get; set; } = string.Empty;
     public long Size { get; set; }
     public DateTime UploadDate { get; set; }
+    public bool IsDeleted { get; set; }
+    public DateTime? DeletedDate { get; set; }
     public Guid UserId { get; set; }
     public User User { get; set; } = null!;
 }
