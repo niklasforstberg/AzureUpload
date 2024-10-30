@@ -72,10 +72,33 @@ public class StorageController : ControllerBase
             return BadRequest("No file was provided");
         }
 
+        // Check for video file types
+        var videoContentTypes = new[] 
+        {
+            "video/mp4",
+            "video/mpeg",
+            "video/ogg",
+            "video/webm",
+            "video/x-msvideo",
+            "video/quicktime"
+        };
+
+        if (videoContentTypes.Contains(file.ContentType.ToLower()))
+        {
+            return BadRequest("Video files are not allowed");
+        }
+
         try
         {
+            // Sanitize filename
+            var sanitizedFileName = SanitizeFileName(file.FileName);
+            if (string.IsNullOrWhiteSpace(sanitizedFileName))
+            {
+                return BadRequest("Invalid filename");
+            }
+
             var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
-            var blobClient = containerClient.GetBlobClient(file.FileName);
+            var blobClient = containerClient.GetBlobClient(sanitizedFileName);
 
             // Check if blob already exists
             if (await blobClient.ExistsAsync())
@@ -99,7 +122,7 @@ public class StorageController : ControllerBase
             var properties = await blobClient.GetPropertiesAsync();
             
             return Ok(new BlobItemResponse(
-                Name: file.FileName,
+                Name: sanitizedFileName,
                 ContentType: properties.Value.ContentType,
                 Size: properties.Value.ContentLength,
                 LastModified: properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -116,5 +139,20 @@ public class StorageController : ControllerBase
             _logger.LogError(ex, "Error uploading file {FileName}", file.FileName);
             return StatusCode(500, "An unexpected error occurred while uploading the file");
         }
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        // Remove invalid characters
+        var invalidChars = Path.GetInvalidFileNameChars()
+            .Concat(new[] { '#', '%', '&', '{', '}', '\\', '<', '>', '*', '?', '/', ' ', '$', '!' })
+            .ToArray();
+
+        var sanitizedName = string.Join("_", fileName.Split(invalidChars, StringSplitOptions.RemoveEmptyEntries));
+        
+        // Replace multiple consecutive underscores with a single one
+        sanitizedName = string.Join("_", sanitizedName.Split(new[] { '_' }, StringSplitOptions.RemoveEmptyEntries));
+        
+        return sanitizedName.Trim('.');
     }
 }

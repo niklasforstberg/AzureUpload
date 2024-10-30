@@ -3,6 +3,7 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+dev-token.txt
 
 # cursor rules
 .cursorrules
