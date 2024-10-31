@@ -287,6 +287,43 @@ public class AuthController : ControllerBase
         });
     }
 
+    [HttpDelete("users/{id}")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> DeleteUser(Guid id)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(id);
+            
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            // Prevent deleting the last admin user
+            if (user.Role == "ADMIN")
+            {
+                var adminCount = await _context.Users.CountAsync(u => u.Role == "ADMIN");
+                if (adminCount <= 1)
+                {
+                    return BadRequest("Cannot delete the last admin user");
+                }
+            }
+
+            _context.Users.Remove(user);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("User deleted: {Username} (ID: {Id})", user.Username, user.Id);
+            
+            return Ok("User deleted successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting user with ID {UserId}", id);
+            return StatusCode(500, "An error occurred while deleting the user");
+        }
+    }
+
     private string GenerateJwtToken(User user)
     {
         var claims = new List<Claim>

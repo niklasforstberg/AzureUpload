@@ -139,7 +139,8 @@ public class StorageController : ControllerBase
                 ContentType = file.ContentType,
                 Size = file.Length,
                 UploadDate = DateTime.UtcNow,
-                UserId = userId
+                UserId = userId,
+                AzureUri = blobClient.Uri.ToString()
             };
 
             await _context.Files.AddAsync(storedFile);
@@ -180,7 +181,8 @@ public class StorageController : ControllerBase
                     f.BlobName,
                     f.ContentType,
                     f.Size,
-                    f.UploadDate
+                    f.UploadDate,
+                    f.AzureUri
                 ))
                 .ToListAsync();
 

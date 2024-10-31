@@ -6,5 +6,6 @@ public record StoredFileResponse(
     string BlobName,
     string ContentType,
     long Size,
-    DateTime UploadDate
+    DateTime UploadDate,
+    string AzureUri
 );
