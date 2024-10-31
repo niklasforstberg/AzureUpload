@@ -124,6 +124,28 @@ builder.Services.AddOpenTelemetry()
 // Simplified Health Checks
 builder.Services.AddHealthChecks(); 
 
+// Add CORS configuration
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("DevelopmentCors",
+        policy =>
+        {
+            policy.WithOrigins("http://localhost:5173")
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        });
+    
+    options.AddPolicy("ProductionCors",
+        policy =>
+        {
+            policy.WithOrigins("https://your-production-domain.com")
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        });
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
@@ -134,6 +156,17 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Add CORS middleware - must be before Authentication/Authorization
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors("DevelopmentCors");
+}
+else
+{
+    app.UseCors("ProductionCors");
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 
