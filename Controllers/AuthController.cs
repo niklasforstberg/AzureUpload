@@ -215,7 +215,6 @@ public class AuthController : ControllerBase
         var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!);
 
         var devUserId = "08586847-E00A-4BA8-AE6C-541CB15C6AD0"; //me in da db
-        Console.WriteLine($"Development token user ID: {devUserId}");
 
         var tokenDescriptor = new SecurityTokenDescriptor
         {
@@ -223,6 +222,48 @@ public class AuthController : ControllerBase
             {
                 new Claim(ClaimTypes.Name, "nik"),
                 new Claim(ClaimTypes.Role, "ADMIN"),
+                new Claim(ClaimTypes.NameIdentifier, devUserId)
+            }),
+            Expires = DateTime.UtcNow.AddYears(1),
+            Issuer = _configuration["Jwt:Issuer"],
+            Audience = _configuration["Jwt:Audience"],
+            SigningCredentials = new SigningCredentials(
+                new SymmetricSecurityKey(key),
+                SecurityAlgorithms.HmacSha256Signature)
+        };
+
+        var token = tokenHandler.CreateToken(tokenDescriptor);
+        var tokenString = tokenHandler.WriteToken(token);
+
+        return Ok(new
+        {
+            Token = tokenString,
+            ExpiresIn = "1 year",
+            TokenType = "Bearer",
+            Note = "This token is for development purposes only!",
+            SwaggerCopyPaste = $"Bearer {tokenString}"
+        });
+    }
+
+    [HttpGet("development-token-user")]
+    public IActionResult GetDevelopmentTokenUser()
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return NotFound();
+        }
+
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]!);
+
+        var devUserId = "14A317B6-54AB-439D-A031-DAA707E3748D"; // Kims db ID
+
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(new[]
+            {
+                new Claim(ClaimTypes.Name, "kim"),
+                new Claim(ClaimTypes.Role, "USER"),
                 new Claim(ClaimTypes.NameIdentifier, devUserId)
             }),
             Expires = DateTime.UtcNow.AddYears(1),
