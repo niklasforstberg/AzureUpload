@@ -33,7 +33,7 @@ public class StorageController : ControllerBase
             ?? throw new ArgumentNullException("AzureStorage:ContainerName configuration is required");
     }
 
-    [HttpGet]
+    [HttpGet("azure-files")]
     public async Task<ActionResult<IEnumerable<BlobItemResponse>>> ListFiles()
     {
         try
@@ -50,11 +50,11 @@ public class StorageController : ControllerBase
                 var properties = await blobClient.GetPropertiesAsync();
                 
                 blobs.Add(new BlobItemResponse(
-                    Name: blobItem.Name,
-                    ContentType: properties.Value.ContentType ?? "application/octet-stream",
-                    Size: blobItem.Properties.ContentLength ?? 0,
-                    LastModified: properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
-                    Uri: blobClient.Uri.ToString()
+                    blobItem.Name,
+                    properties.Value.ContentType ?? "application/octet-stream",
+                    blobItem.Properties.ContentLength ?? 0,
+                    properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                    blobClient.Uri.ToString()
                 ));
             }
 
@@ -146,11 +146,11 @@ public class StorageController : ControllerBase
             await _context.SaveChangesAsync();
             
             return Ok(new BlobItemResponse(
-                Name: sanitizedFileName,
-                ContentType: properties.Value.ContentType,
-                Size: properties.Value.ContentLength,
-                LastModified: properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
-                Uri: blobClient.Uri.ToString()
+                sanitizedFileName,
+                properties.Value.ContentType,
+                properties.Value.ContentLength,
+                properties.Value.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                blobClient.Uri.ToString()
             ));
         }
         catch (Exception ex)
@@ -161,7 +161,7 @@ public class StorageController : ControllerBase
     }
 
     [HttpGet("my-files")]
-    public async Task<ActionResult<IEnumerable<StoredFile>>> GetMyFiles()
+    public async Task<ActionResult<IEnumerable<StoredFileResponse>>> GetMyFiles()
     {
         try
         {
@@ -174,6 +174,14 @@ public class StorageController : ControllerBase
             var files = await _context.Files
                 .Where(f => f.UserId == userId && !f.IsDeleted)
                 .OrderByDescending(f => f.UploadDate)
+                .Select(f => new StoredFileResponse(
+                    f.Id,
+                    f.FileName,
+                    f.BlobName,
+                    f.ContentType,
+                    f.Size,
+                    f.UploadDate
+                ))
                 .ToListAsync();
 
             return Ok(files);
@@ -194,8 +202,9 @@ public class StorageController : ControllerBase
             var orphanedFiles = new List<OrphanedFileInfo>();
             var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
             
-            // Get all files from database
+            // Get all non-deleted files from database
             var dbFiles = await _context.Files
+                .Where(f => !f.IsDeleted)  // Only include non-deleted files
                 .Select(f => new { f.Id, f.BlobName })
                 .ToDictionaryAsync(f => f.BlobName, f => f.Id);
 
@@ -205,28 +214,28 @@ public class StorageController : ControllerBase
             {
                 azureFiles.Add(blob.Name);
                 
-                // Check if blob exists in DB
+                // Check if blob exists in DB (among non-deleted files)
                 if (!dbFiles.ContainsKey(blob.Name))
                 {
                     orphanedFiles.Add(new OrphanedFileInfo(
-                        FileName: blob.Name,
-                        Location: "Azure",
-                        Size: blob.Properties.ContentLength ?? 0,
-                        LastModified: blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow
+                        blob.Name,
+                        "Azure",
+                        blob.Properties.ContentLength ?? 0,
+                        blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow
                     ));
                 }
             }
 
-            // Check for files in DB that don't exist in Azure
+            // Check for non-deleted files in DB that don't exist in Azure
             foreach (var dbFile in dbFiles)
             {
                 if (!azureFiles.Contains(dbFile.Key))
                 {
                     orphanedFiles.Add(new OrphanedFileInfo(
-                        FileName: dbFile.Key,
-                        Location: "Database",
-                        Size: 0, // Size unknown for DB-only files
-                        LastModified: DateTime.UtcNow // We don't have this info readily available
+                        dbFile.Key,
+                        "Database",
+                        0,
+                        DateTime.UtcNow
                     ));
                 }
             }
@@ -258,10 +267,10 @@ public class StorageController : ControllerBase
             }
 
             return Ok(new FileAuditResponse(
-                OrphanedFiles: orphanedFiles,
-                TotalOrphaned: orphanedFiles.Count,
-                CleanupPerformed: cleanup,
-                AuditTime: DateTime.UtcNow
+                orphanedFiles,
+                orphanedFiles.Count,
+                cleanup,
+                DateTime.UtcNow
             ));
         }
         catch (Exception ex)
