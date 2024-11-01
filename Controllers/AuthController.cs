@@ -324,6 +324,152 @@ public class AuthController : ControllerBase
         }
     }
 
+    [HttpPut("change-password")]
+    [Authorize(Policy = "UserAccess")]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request)
+    {
+        try
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (userId == null)
+            {
+                return BadRequest("User ID claim not found");
+            }
+
+            var user = await _context.Users.FindAsync(Guid.Parse(userId));
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            // Verify current password
+            if (!VerifyPassword(request.CurrentPassword, user.PasswordHash))
+            {
+                return BadRequest("Current password is incorrect");
+            }
+
+            // Update password
+            user.PasswordHash = HashPassword(request.NewPassword);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Password changed for user: {Username}", user.Username);
+            return Ok("Password changed successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing password for user");
+            return StatusCode(500, "An error occurred while changing the password");
+        }
+    }
+
+    [HttpPut("change-username")]
+    [Authorize(Policy = "UserAccess")]
+    public async Task<IActionResult> ChangeUsername(ChangeUsernameRequest request)
+    {
+        try
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (userId == null)
+            {
+                return BadRequest("User ID claim not found");
+            }
+
+            var user = await _context.Users.FindAsync(Guid.Parse(userId));
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            // Check if new username is already taken
+            if (await _context.Users.AnyAsync(u => u.Username == request.NewUsername && u.Id != user.Id))
+            {
+                return BadRequest("Username is already taken");
+            }
+
+            // Update username
+            user.Username = request.NewUsername;
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Username changed for user ID {UserId} from {OldUsername} to {NewUsername}", 
+                user.Id, user.Username, request.NewUsername);
+            
+            // Generate new token with updated username
+            var newToken = GenerateJwtToken(user);
+            
+            return Ok(new { 
+                Message = "Username changed successfully",
+                NewToken = newToken 
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error changing username");
+            return StatusCode(500, "An error occurred while changing the username");
+        }
+    }
+
+    [HttpPut("admin/change-password")]
+    [Authorize(Policy = "AdminAccess")]
+    public async Task<IActionResult> AdminChangePassword(AdminChangePasswordRequest request)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(request.UserId);
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            // Update password
+            user.PasswordHash = HashPassword(request.NewPassword);
+            await _context.SaveChangesAsync();
+
+            var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            _logger.LogInformation("Admin {AdminId} changed password for user: {Username}", adminId, user.Username);
+            return Ok("Password changed successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in admin password change");
+            return StatusCode(500, "An error occurred while changing the password");
+        }
+    }
+
+    [HttpPut("admin/change-username")]
+    [Authorize(Policy = "AdminAccess")]
+    public async Task<IActionResult> AdminChangeUsername(AdminChangeUsernameRequest request)
+    {
+        try
+        {
+            var user = await _context.Users.FindAsync(request.UserId);
+            if (user == null)
+            {
+                return NotFound("User not found");
+            }
+
+            // Check if new username is already taken
+            if (await _context.Users.AnyAsync(u => u.Username == request.NewUsername && u.Id != user.Id))
+            {
+                return BadRequest("Username is already taken");
+            }
+
+            var oldUsername = user.Username;
+            user.Username = request.NewUsername;
+            await _context.SaveChangesAsync();
+
+            var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            _logger.LogInformation("Admin {AdminId} changed username for user {UserId} from {OldUsername} to {NewUsername}", 
+                adminId, user.Id, oldUsername, request.NewUsername);
+            
+            return Ok("Username changed successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in admin username change");
+            return StatusCode(500, "An error occurred while changing the username");
+        }
+    }
+
     private string GenerateJwtToken(User user)
     {
         var claims = new List<Claim>
