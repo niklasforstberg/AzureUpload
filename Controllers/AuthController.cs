@@ -409,7 +409,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPut("admin/change-password")]
-    [Authorize(Policy = "AdminAccess")]
+    [Authorize(Policy = "AdminOnly")]
     public async Task<IActionResult> AdminChangePassword(AdminChangePasswordRequest request)
     {
         try
@@ -436,7 +436,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPut("admin/change-username")]
-    [Authorize(Policy = "AdminAccess")]
+    [Authorize(Policy = "AdminOnly")]
     public async Task<IActionResult> AdminChangeUsername(AdminChangeUsernameRequest request)
     {
         try
