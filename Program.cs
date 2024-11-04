@@ -14,6 +14,11 @@ using System.Collections.Generic;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.WebHost.ConfigureKestrel(serverOptions =>
+{
+    serverOptions.ListenAnyIP(5186);   
+});
+
 // Add Serilog
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -130,10 +135,17 @@ builder.Services.AddCors(options =>
     options.AddPolicy("DevelopmentCors",
         policy =>
         {
-            policy.WithOrigins("http://localhost:5173")
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
+            policy.SetIsOriginAllowed(origin => 
+                {
+                    var host = new Uri(origin).Host;
+                    return host == "localhost" || 
+                           host.StartsWith("192.168.") ||
+                           host.StartsWith("10.0.") ||
+                           host.StartsWith("172.16.");
+                })
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials();
         });
     
     options.AddPolicy("ProductionCors",
@@ -152,9 +164,16 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "v1");
+        options.RoutePrefix = "swagger";
+        // Configure the Swagger UI to use localhost when opened in browser
+        options.ConfigObject.AdditionalItems["host"] = "localhost:5186";
+    });
 }
 
+// Comment out or remove this line
 app.UseHttpsRedirection();
 
 // Add CORS middleware - must be before Authentication/Authorization

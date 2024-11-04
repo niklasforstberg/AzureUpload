@@ -488,3 +488,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Certificate files
+*.pem
+*.pfx
+.cert/
+dotnetdevcert.md

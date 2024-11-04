@@ -6,6 +6,7 @@ dotnet user-secrets set "AzureStorage:Key" "your-key"
 dotnet user-secrets set "Jwt:Key" "your-secret-key"
 dotnet user-secrets set "Jwt:Issuer" "your-issuer"
 dotnet user-secrets set "Jwt:Audience" "your-audience"
+dotnet user-secrets set "Kestrel:Endpoints:Https:Certificate:Password" "your-secure-password" //for https
 
 
 To create the initial admin user:
@@ -14,5 +15,4 @@ curl -X POST http://localhost:5000/api/auth/register-admin \
 -d '{"username":"admin","password":"your-secure-password","role":"Admin"}'
 
 
-TODO
 

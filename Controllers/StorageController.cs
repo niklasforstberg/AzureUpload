@@ -206,7 +206,7 @@ public class StorageController : ControllerBase
             
             // Get all non-deleted files from database
             var dbFiles = await _context.Files
-                .Where(f => !f.IsDeleted)  // Only include non-deleted files
+                .Where(f => !f.IsDeleted) 
                 .Select(f => new { f.Id, f.BlobName })
                 .ToDictionaryAsync(f => f.BlobName, f => f.Id);
 
@@ -216,7 +216,7 @@ public class StorageController : ControllerBase
             {
                 azureFiles.Add(blob.Name);
                 
-                // Check if blob exists in DB (among non-deleted files)
+                // Check if blob exists in DB
                 if (!dbFiles.ContainsKey(blob.Name))
                 {
                     orphanedFiles.Add(new OrphanedFileInfo(
@@ -338,6 +338,178 @@ public class StorageController : ControllerBase
             _logger.LogError(ex, "Error deleting file {FileName}", fileName);
             return StatusCode(500, "An error occurred while deleting the file");
         }
+    }
+
+    [HttpPost("transfer-ownership")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<ActionResult<FileTransferResponse>> TransferFileOwnership(FileTransferRequest request)
+    {
+        try
+        {
+            if (request.Files.Count == 0)
+            {
+                return BadRequest("No files specified for transfer");
+            }
+
+            // Verify target user exists
+            var targetUser = await _context.Users.FindAsync(request.NewUserId);
+            if (targetUser == null)
+            {
+                return NotFound($"Target user with ID {request.NewUserId} not found");
+            }
+
+            // Find all specified files
+            var filesToTransfer = await _context.Files
+                .Where(f => request.Files.Contains(f.BlobName) && !f.IsDeleted)
+                .ToListAsync();
+
+            if (!filesToTransfer.Any())
+            {
+                return NotFound("None of the specified files were found");
+            }
+
+            // Track results
+            var results = new List<FileTransferResult>();
+            foreach (var fileName in request.Files)
+            {
+                var file = filesToTransfer.FirstOrDefault(f => f.BlobName == fileName);
+                if (file == null)
+                {
+                    results.Add(new FileTransferResult(fileName, false, "File not found"));
+                    continue;
+                }
+
+                // Transfer ownership
+                file.UserId = request.NewUserId;
+                results.Add(new FileTransferResult(fileName, true, "Ownership transferred successfully"));
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new FileTransferResponse(
+                results,
+                results.Count(r => r.Success),
+                request.NewUserId,
+                DateTime.UtcNow
+            ));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error transferring file ownership to user {UserId}", request.NewUserId);
+            return StatusCode(500, "An error occurred while transferring file ownership");
+        }
+    }
+
+    [HttpGet("admin/file-inventory")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<ActionResult<FileInventoryResponse>> GetFileInventory()
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var inventory = new List<FileInventoryItem>();
+
+            // Get all files from database, grouped by BlobName
+            var dbFiles = await _context.Files
+                .Include(f => f.User)
+                .GroupBy(f => f.BlobName)
+                .ToDictionaryAsync(
+                    g => g.Key,
+                    g => g.OrderByDescending(f => f.UploadDate).ToList() // Most recent first
+                );
+
+            // Track which files we've processed from Azure
+            var processedBlobNames = new HashSet<string>();
+
+            // Enumerate all blobs in Azure
+            await foreach (var blobItem in containerClient.GetBlobsAsync())
+            {
+                var blobClient = containerClient.GetBlobClient(blobItem.Name);
+                var properties = await blobClient.GetPropertiesAsync();
+
+                // Try to find matching database records
+                dbFiles.TryGetValue(blobItem.Name, out var fileVersions);
+                var currentVersion = fileVersions?.FirstOrDefault(); // Most recent version
+
+                inventory.Add(new FileInventoryItem(
+                    BlobName: blobItem.Name,
+                    AzureUri: blobClient.Uri.ToString(),
+                    ContentType: properties.Value.ContentType,
+                    Size: properties.Value.ContentLength,
+                    LastModifiedInAzure: properties.Value.LastModified.DateTime,
+                    UploadName: currentVersion?.FileName,
+                    UploadDate: currentVersion?.UploadDate,
+                    IsDeleted: currentVersion?.IsDeleted ?? false,
+                    DeletedDate: currentVersion?.DeletedDate,
+                    Owner: currentVersion?.User == null ? null : new FileOwner(
+                        currentVersion.User.Id,
+                        currentVersion.User.Username
+                    ),
+                    Status: DetermineFileStatus(currentVersion, true),
+                    VersionCount: fileVersions?.Count ?? 0,
+                    HasDeletedVersions: fileVersions?.Any(f => f.IsDeleted) ?? false
+                ));
+
+                processedBlobNames.Add(blobItem.Name);
+            }
+
+            // Add files that exist in database but not in Azure
+            foreach (var dbFile in dbFiles)
+            {
+                if (!processedBlobNames.Contains(dbFile.Key))
+                {
+                    var currentVersion = dbFile.Value.First(); // Most recent version
+                    
+                    // Skip if file is marked as deleted and not in Azure
+                    if (currentVersion.IsDeleted)
+                    {
+                        continue;
+                    }
+
+                    inventory.Add(new FileInventoryItem(
+                        BlobName: dbFile.Key,
+                        AzureUri: currentVersion.AzureUri,
+                        ContentType: currentVersion.ContentType,
+                        Size: currentVersion.Size,
+                        LastModifiedInAzure: null,
+                        UploadName: currentVersion.FileName,
+                        UploadDate: currentVersion.UploadDate,
+                        IsDeleted: currentVersion.IsDeleted,
+                        DeletedDate: currentVersion.DeletedDate,
+                        Owner: new FileOwner(
+                            currentVersion.User.Id,
+                            currentVersion.User.Username
+                        ),
+                        Status: "Missing from Azure", 
+                        VersionCount: dbFile.Value.Count,
+                        HasDeletedVersions: dbFile.Value.Any(f => f.IsDeleted)
+                    ));
+                }
+            }
+
+            return Ok(new FileInventoryResponse(
+                Files: inventory,
+                TotalCount: inventory.Count,
+                TotalSize: inventory.Sum(f => f.Size),
+                ScanTime: DateTime.UtcNow
+            ));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting file inventory");
+            return StatusCode(500, "An error occurred while retrieving the file inventory");
+        }
+    }
+
+    private static string DetermineFileStatus(StoredFile? currentVersion, bool existsInAzure)
+    {
+        if (currentVersion == null)
+            return "Orphaned in Azure";
+        if (!existsInAzure)
+            return "Missing from Azure";
+        if (currentVersion.IsDeleted)
+            return "Marked as Deleted";
+        return "Active";
     }
 
     private static string SanitizeFileName(string fileName)
